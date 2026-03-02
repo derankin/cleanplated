@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 
 use crate::domain::{
-    entities::{Facility, FacilityVoteSummary, SystemIngestionStatus, VoteValue},
+    entities::{
+        AutocompleteSuggestion, Facility, FacilitySearchQuery, FacilityVoteSummary,
+        ScoreSliceCounts, SystemIngestionStatus, VoteValue,
+    },
     errors::RepositoryError,
 };
 
@@ -28,4 +31,17 @@ pub trait FacilityRepository: Send + Sync {
         &self,
         facility_ids: &[String],
     ) -> Result<HashMap<String, FacilityVoteSummary>, RepositoryError>;
+    async fn search_facilities(
+        &self,
+        query: &FacilitySearchQuery,
+    ) -> Result<(Vec<Facility>, usize, ScoreSliceCounts), RepositoryError>;
+    async fn autocomplete(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<AutocompleteSuggestion>, RepositoryError>;
+    async fn top_picks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(Facility, FacilityVoteSummary)>, RepositoryError>;
 }

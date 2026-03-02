@@ -236,6 +236,73 @@ body {
   color: var(--cp-green-600);
 }
 
+/* ─── Autocomplete dropdown ─── */
+.cp-search-wrap {
+  position: relative;
+}
+
+.cp-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 9000;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-top: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.cp-suggestions__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  font-size: 14px;
+  border-bottom: 1px solid var(--cp-gray-10);
+  transition: background var(--duration-fast) var(--ease-productive);
+}
+
+.cp-suggestions__item:last-child {
+  border-bottom: none;
+}
+
+.cp-suggestions__item:hover,
+.cp-suggestions__item--focused {
+  background: var(--cp-surface-hover);
+}
+
+.cp-suggestions__name {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-suggestions__meta {
+  color: var(--cp-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cp-suggestions__score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  padding: 1px 6px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
 /* ═══════════════════════════════════════════════════
    Quick stats (Carbon structured-list inspired)
    ═══════════════════════════════════════════════════ */

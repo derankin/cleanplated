@@ -37,17 +37,28 @@ impl Jurisdiction {
         }
     }
 
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::LosAngelesCounty,
+            Self::SanDiegoCounty,
+            Self::LongBeach,
+            Self::RiversideCounty,
+            Self::SanBernardinoCounty,
+            Self::OrangeCounty,
+            Self::Pasadena,
+        ]
+    }
+
     pub fn from_code(code: &str) -> Option<Self> {
-        match code {
-            "lac" => Some(Self::LosAngelesCounty),
-            "sdc" => Some(Self::SanDiegoCounty),
-            "lb" => Some(Self::LongBeach),
-            "riv" => Some(Self::RiversideCounty),
-            "sbc" => Some(Self::SanBernardinoCounty),
-            "oc" => Some(Self::OrangeCounty),
-            "pas" => Some(Self::Pasadena),
-            _ => None,
-        }
+        Self::all().iter().find(|j| j.code() == code).cloned()
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        let lower = label.to_ascii_lowercase();
+        Self::all()
+            .iter()
+            .find(|j| j.label().to_ascii_lowercase() == lower)
+            .cloned()
     }
 }
 
@@ -125,4 +136,36 @@ impl FacilityVoteSummary {
     pub fn score(&self) -> i64 {
         self.likes as i64 - self.dislikes as i64
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AutocompleteSuggestion {
+    pub id: String,
+    pub name: String,
+    pub city: String,
+    pub postal_code: String,
+    pub trust_score: u8,
+}
+
+#[derive(Clone, Debug)]
+pub struct FacilitySearchQuery {
+    pub q: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub radius_miles: Option<f64>,
+    pub jurisdiction: Option<String>,
+    pub sort: Option<String>,
+    pub score_slice: Option<String>,
+    pub recent_only: Option<bool>,
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ScoreSliceCounts {
+    pub all: usize,
+    pub elite: usize,
+    pub solid: usize,
+    pub watch: usize,
 }

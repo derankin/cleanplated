@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::error;
 
 use crate::{
-    application::dto::FacilitySearchQuery,
-    domain::entities::VoteValue,
+    domain::entities::{FacilitySearchQuery, VoteValue},
     presentation::http::AppState,
 };
 
@@ -26,6 +25,12 @@ pub struct FacilitySearchParams {
     pub recent_only: Option<bool>,
     pub page: Option<usize>,
     pub page_size: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AutocompleteParams {
+    pub q: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -182,6 +187,35 @@ pub async fn record_vote(
             }
         })),
     ))
+}
+
+pub async fn autocomplete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<AutocompleteParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let prefix = params.q.unwrap_or_default();
+    let trimmed = prefix.trim();
+    if trimmed.len() < 2 {
+        return Ok(Json(serde_json::json!({ "data": [] })));
+    }
+
+    let client_key = extract_voter_key(&headers);
+    if !state.autocomplete_rate_limiter.allow(&client_key).await {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded, please try again shortly".to_owned(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(8).clamp(1, 20);
+    let suggestions = state
+        .directory_service
+        .autocomplete(trimmed, limit)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(serde_json::json!({ "data": suggestions })))
 }
 
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {

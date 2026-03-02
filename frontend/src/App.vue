@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ThumbsDown16,
   ThumbsUp16,
@@ -69,6 +69,14 @@ type TopPicksResponse = {
   count: number
 }
 
+type AutocompleteSuggestion = {
+  id: string
+  name: string
+  city: string
+  postal_code: string
+  trust_score: number
+}
+
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type VoteType = 'like' | 'dislike'
@@ -108,15 +116,21 @@ const topTenFacilities = ref<FacilitySummary[]>([])
 const voteInFlight = ref<Record<string, boolean>>({})
 const jurisdictionOptions = [
   { label: 'All areas', value: 'all' },
-  { label: 'Los Angeles County', value: 'Los Angeles County' },
-  { label: 'San Diego County', value: 'San Diego County' },
-  { label: 'Orange County', value: 'Orange County' },
-  { label: 'Riverside County', value: 'Riverside County' },
-  { label: 'San Bernardino County', value: 'San Bernardino County' },
-  { label: 'Long Beach', value: 'Long Beach' },
-  { label: 'Pasadena', value: 'Pasadena' },
-  { label: 'Vernon', value: 'Vernon' },
+  { label: 'Los Angeles County', value: 'lac' },
+  { label: 'San Diego County', value: 'sdc' },
+  { label: 'Orange County', value: 'oc' },
+  { label: 'Riverside County', value: 'riv' },
+  { label: 'San Bernardino County', value: 'sbc' },
+  { label: 'Long Beach', value: 'lb' },
+  { label: 'Pasadena', value: 'pas' },
 ]
+
+const suggestions = ref<AutocompleteSuggestion[]>([])
+const showSuggestions = ref(false)
+const focusedSuggestionIndex = ref(-1)
+let autocompleteTimer: ReturnType<typeof setTimeout> | null = null
+let autocompleteController: AbortController | null = null
+let searchController: AbortController | null = null
 
 const googleMapsApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || ''
 const mapReady = ref(false)
@@ -231,7 +245,7 @@ const topTenRanked = computed(() =>
   }),
 )
 
-const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 
 const scoreColor = (score: number) => {
   if (score >= 90) return 'score--excellent'
@@ -309,6 +323,81 @@ const distanceLabel = (facility: FacilitySummary) => {
     facility.longitude,
   )
   return `${miles.toFixed(1)} mi`
+}
+
+async function fetchSuggestions(query: string) {
+  if (autocompleteController) autocompleteController.abort()
+
+  const trimmed = query.trim()
+  if (trimmed.length < 2) {
+    suggestions.value = []
+    showSuggestions.value = false
+    return
+  }
+
+  autocompleteController = new AbortController()
+  try {
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/facilities/autocomplete?q=${encodeURIComponent(trimmed)}&limit=8`,
+      { signal: autocompleteController.signal },
+    )
+    if (!response.ok) return
+    const payload = await response.json()
+    suggestions.value = payload.data ?? []
+    showSuggestions.value = suggestions.value.length > 0
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return
+    suggestions.value = []
+    showSuggestions.value = false
+  }
+}
+
+const onSearchInput = () => {
+  focusedSuggestionIndex.value = -1
+  if (autocompleteTimer) clearTimeout(autocompleteTimer)
+  autocompleteTimer = setTimeout(() => {
+    void fetchSuggestions(search.value)
+  }, 250)
+}
+
+const selectSuggestion = (suggestion: AutocompleteSuggestion) => {
+  search.value = suggestion.name
+  showSuggestions.value = false
+  suggestions.value = []
+  focusedSuggestionIndex.value = -1
+  trackEvent('cp_autocomplete_selected', {
+    suggestion_id: suggestion.id,
+    suggestion_name: suggestion.name,
+  })
+  void fetchFacilities(true)
+}
+
+const dismissSuggestions = () => {
+  setTimeout(() => {
+    showSuggestions.value = false
+    focusedSuggestionIndex.value = -1
+  }, 200)
+}
+
+const onSearchKeydown = (event: KeyboardEvent) => {
+  if (!showSuggestions.value || suggestions.value.length === 0) return
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    focusedSuggestionIndex.value = Math.min(
+      focusedSuggestionIndex.value + 1,
+      suggestions.value.length - 1,
+    )
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    focusedSuggestionIndex.value = Math.max(focusedSuggestionIndex.value - 1, -1)
+  } else if (event.key === 'Enter' && focusedSuggestionIndex.value >= 0) {
+    event.preventDefault()
+    selectSuggestion(suggestions.value[focusedSuggestionIndex.value])
+  } else if (event.key === 'Escape') {
+    showSuggestions.value = false
+    focusedSuggestionIndex.value = -1
+  }
 }
 
 const withVoteDefaults = (facility: FacilitySummary): FacilitySummary => {
@@ -432,6 +521,9 @@ const buildFacilitiesQuery = (page: number, requestedPageSize: number, sort: Sor
 
   if (term) {
     query.set('q', term)
+    // Always send location for proximity ranking signal on text search
+    query.set('latitude', String(activeCenter.value.latitude))
+    query.set('longitude', String(activeCenter.value.longitude))
   } else {
     query.set('latitude', String(activeCenter.value.latitude))
     query.set('longitude', String(activeCenter.value.longitude))
@@ -505,6 +597,8 @@ const onRadiusChange = (rawValue: string | number) => {
 }
 
 async function fetchFacilities(resetPage = false) {
+  if (searchController) searchController.abort()
+
   if (resetPage) {
     currentPage.value = 1
   }
@@ -512,10 +606,13 @@ async function fetchFacilities(resetPage = false) {
   loading.value = true
   error.value = null
 
+  searchController = new AbortController()
   const query = buildFacilitiesQuery(currentPage.value, pageSize.value, sortMode.value)
 
   try {
-    const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`)
+    const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`, {
+      signal: searchController.signal,
+    })
     if (!response.ok) {
       throw new Error('We couldn\'t load restaurants right now. Please try again.')
     }
@@ -532,11 +629,9 @@ async function fetchFacilities(resetPage = false) {
       watch: 0,
     }
 
-    if (currentPage.value > totalPages.value) {
+    if (currentPage.value > totalPages.value && totalPages.value >= 1) {
       currentPage.value = totalPages.value
-      if (totalMatches.value > 0) {
-        await fetchFacilities()
-      }
+      await fetchFacilities()
     }
     trackEvent('cp_search_results_loaded', {
       total_count: totalMatches.value,
@@ -554,6 +649,7 @@ async function fetchFacilities(resetPage = false) {
     })
     void fetchTopTen()
   } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') return
     error.value = cause instanceof Error ? cause.message : 'Something unexpected happened. Please try again.'
     trackEvent('cp_search_results_failed', {
       query_type: classifyQueryTerm(search.value),
@@ -847,6 +943,12 @@ onMounted(async () => {
   }
   await Promise.all(startupTasks)
 })
+
+onUnmounted(() => {
+  if (autocompleteTimer) clearTimeout(autocompleteTimer)
+  if (autocompleteController) autocompleteController.abort()
+  if (searchController) searchController.abort()
+})
 </script>
 
 <template>
@@ -867,14 +969,43 @@ onMounted(async () => {
 
       <!-- ─── Search bar ─── -->
       <form class="cp-search" @submit.prevent="onSearchSubmit">
-        <cv-search
-          v-model="search"
-          size="lg"
-          placeholder="Restaurant name, address, or ZIP"
-          label="Search restaurants"
-          :form-item="false"
-          class="cp-search__input"
-        />
+        <div class="cp-search-wrap">
+          <cv-search
+            v-model="search"
+            size="lg"
+            placeholder="Restaurant name, address, or ZIP"
+            label="Search restaurants"
+            :form-item="false"
+            class="cp-search__input"
+            role="combobox"
+            aria-autocomplete="list"
+            :aria-expanded="showSuggestions && suggestions.length > 0"
+            @input="onSearchInput"
+            @keydown="onSearchKeydown"
+            @focus="() => { if (suggestions.length > 0) showSuggestions = true }"
+            @blur="dismissSuggestions"
+          />
+          <ul
+            v-if="showSuggestions && suggestions.length > 0"
+            class="cp-suggestions"
+            role="listbox"
+            aria-label="Search suggestions"
+          >
+            <li
+              v-for="(s, index) in suggestions"
+              :key="s.id"
+              class="cp-suggestions__item"
+              :class="{ 'cp-suggestions__item--focused': index === focusedSuggestionIndex }"
+              role="option"
+              :aria-selected="index === focusedSuggestionIndex"
+              @mousedown.prevent="selectSuggestion(s)"
+            >
+              <span class="cp-suggestions__name">{{ s.name }}</span>
+              <span class="cp-suggestions__meta">{{ s.city }}, {{ s.postal_code }}</span>
+              <span class="cp-suggestions__score" :class="scoreColor(s.trust_score)">{{ s.trust_score }}</span>
+            </li>
+          </ul>
+        </div>
         <div class="cp-search__actions">
           <cv-button kind="primary" :icon="Search16" @click="onSearchSubmit">
             Search
@@ -1176,8 +1307,10 @@ onMounted(async () => {
       <p class="cp-meta">Last updated: {{ lastRefreshLabel }}</p>
     </section>
 
-    <!-- ─── Footer ─── -->
-    <footer class="cp-footer">
+  </main>
+
+  <!-- ─── Footer ─── -->
+  <footer class="cp-footer">
     <div class="cp-footer__inner">
       <p class="cp-footer__brand">CleanPlated</p>
       <p class="cp-footer__copy">
@@ -1194,6 +1327,5 @@ onMounted(async () => {
       </nav>
       <p class="cp-footer__legal">&copy; {{ new Date().getFullYear() }} CleanPlated. All rights reserved.</p>
     </div>
-    </footer>
-  </main>
+  </footer>
 </template>
