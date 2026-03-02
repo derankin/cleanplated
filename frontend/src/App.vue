@@ -393,7 +393,8 @@ const onSearchKeydown = (event: KeyboardEvent) => {
     focusedSuggestionIndex.value = Math.max(focusedSuggestionIndex.value - 1, -1)
   } else if (event.key === 'Enter' && focusedSuggestionIndex.value >= 0) {
     event.preventDefault()
-    selectSuggestion(suggestions.value[focusedSuggestionIndex.value])
+    const picked = suggestions.value[focusedSuggestionIndex.value]
+    if (picked) selectSuggestion(picked)
   } else if (event.key === 'Escape') {
     showSuggestions.value = false
     focusedSuggestionIndex.value = -1
