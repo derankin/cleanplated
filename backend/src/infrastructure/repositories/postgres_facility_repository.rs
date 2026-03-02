@@ -173,6 +173,16 @@ impl PostgresFacilityRepository {
 
         sqlx::query(
             r#"
+            CREATE INDEX IF NOT EXISTS idx_facilities_lat_lon
+            ON facilities (latitude, longitude)
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(to_repository_error)?;
+
+        sqlx::query(
+            r#"
             CREATE INDEX IF NOT EXISTS idx_facilities_geo
             ON facilities USING GIST (ll_to_earth(latitude, longitude))
             "#,
@@ -751,6 +761,86 @@ impl FacilityRepository for PostgresFacilityRepository {
             .collect();
 
         Ok(suggestions)
+    }
+
+    async fn search_markers(
+        &self,
+        query: &FacilitySearchQuery,
+        limit: usize,
+    ) -> Result<Vec<(String, String, f64, f64, u8)>, RepositoryError> {
+        let capped = limit.clamp(1, 200) as i64;
+        let has_search_term = query
+            .q
+            .as_ref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+
+        let mut builder = QueryBuilder::<Postgres>::new(
+            "SELECT id, name, latitude, longitude, trust_score FROM facilities WHERE 1=1",
+        );
+
+        // Bounding box filter
+        if let (Some(min_lat), Some(max_lat), Some(min_lon), Some(max_lon)) =
+            (query.min_lat, query.max_lat, query.min_lon, query.max_lon)
+        {
+            builder.push(" AND latitude BETWEEN ");
+            builder.push_bind(min_lat);
+            builder.push(" AND ");
+            builder.push_bind(max_lat);
+            builder.push(" AND longitude BETWEEN ");
+            builder.push_bind(min_lon);
+            builder.push(" AND ");
+            builder.push_bind(max_lon);
+        }
+
+        // Jurisdiction filter
+        if let Some(jurisdiction) = query
+            .jurisdiction
+            .as_ref()
+            .map(|v| v.trim().to_ascii_lowercase())
+        {
+            if !jurisdiction.is_empty() && jurisdiction != "all" {
+                let code = Jurisdiction::from_code(&jurisdiction)
+                    .or_else(|| Jurisdiction::from_label(&jurisdiction))
+                    .map(|j| j.code().to_owned())
+                    .unwrap_or(jurisdiction);
+                builder.push(" AND LOWER(jurisdiction) = ");
+                builder.push_bind(code);
+            }
+        }
+
+        // Text search filter
+        if has_search_term {
+            let term = query.q.as_ref().unwrap().trim();
+            builder.push(" AND (search_vector @@ plainto_tsquery('english', ");
+            builder.push_bind(term.to_owned());
+            builder.push(") OR similarity(name, ");
+            builder.push_bind(term.to_owned());
+            builder.push(") > ");
+            builder.push_bind(TRIGRAM_SIMILARITY_THRESHOLD);
+            builder.push(")");
+        }
+
+        builder.push(" ORDER BY trust_score DESC LIMIT ");
+        builder.push_bind(capped);
+
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_repository_error)?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let id: String = row.get("id");
+            let name: String = row.get("name");
+            let lat: f64 = row.get("latitude");
+            let lon: f64 = row.get("longitude");
+            let ts_raw: i16 = row.get("trust_score");
+            results.push((id, name, lat, lon, u8::try_from(ts_raw).unwrap_or(0)));
+        }
+
+        Ok(results)
     }
 }
 

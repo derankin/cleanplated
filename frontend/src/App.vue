@@ -142,7 +142,20 @@ let mapMarkers: any[] = []
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mapInfoWindow: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+let markerById: Record<string, any> = {}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let radiusCircle: any = null
+
+type MarkerPoint = { id: string; name: string; latitude: number; longitude: number; trust_score: number }
+type MarkerResponse = { data: MarkerPoint[]; count: number }
+
+const mapMarkerData = ref<MarkerPoint[]>([])
+const showSearchAreaBtn = ref(false)
+const viewportCenter = ref<{ lat: number; lng: number } | null>(null)
+let markerController: AbortController | null = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let idleListener: any = null
+let programmaticMove = false
 
 const resolveApiBaseUrl = () => {
   const configured = import.meta.env.VITE_API_BASE_URL
@@ -257,6 +270,12 @@ const scoreLabel = (score: number) => {
   if (score >= 90) return 'Excellent'
   if (score >= 80) return 'Good'
   return 'Needs attention'
+}
+
+const scoreTierClass = (score: number) => {
+  if (score >= 90) return 'cp-card--elite'
+  if (score >= 80) return 'cp-card--solid'
+  return 'cp-card--watch'
 }
 
 const scoreBandMeta = (score: number) => {
@@ -585,16 +604,21 @@ const goToPage = (page: number) => {
 }
 
 
+let radiusDebounce: ReturnType<typeof setTimeout> | null = null
+
 const onRadiusChange = (rawValue: string | number) => {
   const parsed = typeof rawValue === 'string' ? Number.parseFloat(rawValue) : rawValue
-  if (Number.isFinite(parsed)) {
-    radiusMiles.value = parsed
+  if (!Number.isFinite(parsed)) return
+  radiusMiles.value = parsed
+  if (radiusDebounce) clearTimeout(radiusDebounce)
+  radiusDebounce = setTimeout(() => {
     trackEvent('cp_radius_changed', {
       radius_miles: radiusMiles.value,
       keyword_mode: hasKeywordQuery.value,
     })
-  }
-  void fetchFacilities(true)
+    programmaticMove = true
+    void fetchFacilities(true)
+  }, 300)
 }
 
 async function fetchFacilities(resetPage = false) {
@@ -664,6 +688,66 @@ async function fetchFacilities(resetPage = false) {
   } finally {
     loading.value = false
   }
+}
+
+async function fetchMapMarkers(bounds?: { getNorthEast: () => { lat: () => number; lng: () => number }; getSouthWest: () => { lat: () => number; lng: () => number } }) {
+  if (!bounds) return
+  if (markerController) markerController.abort()
+  markerController = new AbortController()
+  const ne = bounds.getNorthEast()
+  const sw = bounds.getSouthWest()
+  const params = new URLSearchParams({
+    min_lat: String(sw.lat()),
+    max_lat: String(ne.lat()),
+    min_lon: String(sw.lng()),
+    max_lon: String(ne.lng()),
+    limit: '200',
+  })
+  if (jurisdictionFilter.value !== 'all') params.set('jurisdiction', jurisdictionFilter.value)
+  if (search.value.trim()) params.set('q', search.value.trim())
+
+  try {
+    const resp = await fetch(`${apiBaseUrl}/api/v1/facilities/markers?${params}`, {
+      signal: markerController.signal,
+    })
+    if (!resp.ok) return
+    const payload: MarkerResponse = await resp.json()
+    mapMarkerData.value = payload.data
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return
+  }
+}
+
+function searchThisArea() {
+  const center = mapInstance?.getCenter()
+  if (!center) return
+  userLocation.value = {
+    latitude: center.lat(),
+    longitude: center.lng(),
+    accuracy: 0,
+  }
+  // Estimate radius from viewport: half the diagonal in miles
+  const bounds = mapInstance.getBounds()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = (window as any).google
+  if (bounds && g?.maps?.geometry) {
+    const ne = bounds.getNorthEast()
+    const sw = bounds.getSouthWest()
+    const diag = g.maps.geometry.spherical.computeDistanceBetween(
+      new g.maps.LatLng(ne.lat(), ne.lng()),
+      new g.maps.LatLng(sw.lat(), sw.lng()),
+    )
+    radiusMiles.value = Math.min(15, Math.max(0.5, (diag / 2) / 1609.344))
+  }
+  viewportCenter.value = { lat: center.lat(), lng: center.lng() }
+  showSearchAreaBtn.value = false
+  locationMessage.value = 'Showing restaurants near this area'
+  trackEvent('cp_search_this_area', {
+    lat: center.lat(),
+    lng: center.lng(),
+    radius_miles: radiusMiles.value,
+  })
+  void fetchFacilities(true)
 }
 
 async function onSearchSubmit() {
@@ -794,7 +878,7 @@ const loadGoogleMapsScript = (): Promise<void> =>
       return
     }
     const script = document.createElement('script')
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}`
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=geometry`
     script.async = true
     script.defer = true
     script.onload = () => resolve()
@@ -815,16 +899,17 @@ const markerColorForScore = (score: number) => {
   return '#da1e28' // red
 }
 
-const updateMapMarkers = () => {
+const updateMapMarkers = (fitToMarkers = true) => {
   if (!mapInstance) return
   clearMapMarkers()
+  markerById = {}
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const g = (window as any).google
   if (mapInfoWindow) mapInfoWindow.close()
   mapInfoWindow = new g.maps.InfoWindow()
   const bounds = new g.maps.LatLngBounds()
   let hasCoords = false
-  for (const f of facilities.value) {
+  for (const f of mapMarkerData.value) {
     if (!f.latitude || !f.longitude) continue
     hasCoords = true
     const pos = { lat: f.latitude, lng: f.longitude }
@@ -843,26 +928,20 @@ const updateMapMarkers = () => {
       },
     })
     marker.addListener('click', () => {
-      const band = scoreBandMeta(f.trust_score)
-      mapInfoWindow.setContent(
-        `<div style="font-family:IBM Plex Sans,sans-serif;max-width:220px;padding:4px 0">` +
-        `<strong style="font-size:14px">${escHtml(f.name)}</strong>` +
-        `<div style="color:#525252;font-size:12px;margin-top:2px">${escHtml(f.address)}, ${escHtml(f.city)}</div>` +
-        `<div style="margin-top:6px;display:inline-flex;align-items:center;gap:6px">` +
-        `<span style="background:${pinColor};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600">${f.trust_score}</span>` +
-        `<span style="font-size:12px;color:#525252">${escHtml(band.label)}</span>` +
-        `</div></div>`
-      )
-      mapInfoWindow.open(mapInstance, marker)
+      openMarkerInfoWindow(f, marker, pinColor)
     })
     mapMarkers.push(marker)
+    markerById[f.id] = marker
     bounds.extend(pos)
   }
-  if (hasCoords) {
+  if (hasCoords && fitToMarkers) {
+    programmaticMove = true
     mapInstance.fitBounds(bounds)
     if (mapMarkers.length === 1) mapInstance.setZoom(15)
   }
-  updateRadiusCircle(bounds, hasCoords)
+  if (fitToMarkers) {
+    updateRadiusCircle(bounds, hasCoords)
+  }
 }
 
 const updateRadiusCircle = (
@@ -897,6 +976,82 @@ const updateRadiusCircle = (
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const openMarkerInfoWindow = (f: MarkerPoint, marker: any, pinColor: string) => {
+  if (!mapInfoWindow || !mapInstance) return
+  const band = scoreBandMeta(f.trust_score)
+  mapInfoWindow.setContent(
+    `<div style="font-family:IBM Plex Sans,sans-serif;max-width:260px;padding:4px 0">` +
+    `<strong style="font-size:14px;line-height:1.3">${escHtml(f.name)}</strong>` +
+    `<div style="margin-top:6px;display:inline-flex;align-items:center;gap:6px">` +
+    `<span style="background:${pinColor};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600">${f.trust_score}</span>` +
+    `<span style="font-size:12px;color:#525252">${escHtml(band.label)}</span>` +
+    `</div></div>`
+  )
+  mapInfoWindow.open(mapInstance, marker)
+}
+
+const buildFacilityInfoWindowHtml = (facility: FacilitySummary) => {
+  const pinColor = markerColorForScore(facility.trust_score)
+  const band = scoreBandMeta(facility.trust_score)
+  const dist = distanceLabel(facility)
+  const inspected = formatDate(facility.latest_inspection_at)
+  const metaParts = [
+    escHtml(facility.jurisdiction),
+    dist ? escHtml(dist) : '',
+  ].filter(Boolean).join(' · ')
+
+  return (
+    `<div style="font-family:IBM Plex Sans,sans-serif;max-width:280px;padding:4px 0">` +
+    `<div style="display:flex;align-items:flex-start;gap:10px">` +
+      `<div style="flex:1;min-width:0">` +
+        `<strong style="font-size:14px;line-height:1.3;display:block">${escHtml(facility.name)}</strong>` +
+        `<div style="font-size:12px;color:#525252;margin-top:4px;line-height:1.4">${escHtml(facility.address)}, ${escHtml(facility.city)} ${escHtml(facility.postal_code)}</div>` +
+      `</div>` +
+      `<div style="flex-shrink:0;text-align:center;padding:4px 0">` +
+        `<div style="background:${pinColor};color:#fff;font-size:16px;font-weight:700;width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:6px">${facility.trust_score}</div>` +
+        `<div style="font-size:10px;font-weight:600;color:${pinColor};margin-top:2px;text-transform:uppercase;letter-spacing:0.3px">${escHtml(band.label)}</div>` +
+      `</div>` +
+    `</div>` +
+    `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #e0e0e0;font-size:11px;color:#6f6f6f;display:flex;gap:8px;align-items:center">` +
+      `<span>${metaParts}</span>` +
+      `<span style="margin-left:auto">Inspected ${escHtml(inspected)}</span>` +
+    `</div>` +
+    `</div>`
+  )
+}
+
+const focusOnFacility = (facility: FacilitySummary) => {
+  if (!mapInstance || !facility.latitude || !facility.longitude) return
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = (window as any).google
+  if (!g?.maps) return
+
+  // Scroll map into view
+  const mapEl = document.querySelector('.cp-map-section')
+  if (mapEl) mapEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+  const pos = new g.maps.LatLng(facility.latitude, facility.longitude)
+  programmaticMove = true
+  mapInstance.panTo(pos)
+  mapInstance.setZoom(Math.max(mapInstance.getZoom(), 15))
+
+  const html = buildFacilityInfoWindowHtml(facility)
+
+  // If there's a matching marker, anchor the InfoWindow to it
+  const marker = markerById[facility.id]
+  if (mapInfoWindow) mapInfoWindow.close()
+  mapInfoWindow = new g.maps.InfoWindow({ content: html })
+  if (marker) {
+    mapInfoWindow.open(mapInstance, marker)
+  } else {
+    mapInfoWindow.setPosition(pos)
+    mapInfoWindow.open(mapInstance)
+  }
+
+  trackEvent('cp_card_focused_on_map', { facility_id: facility.id, facility_name: facility.name })
+}
+
 const initializeMap = async () => {
   if (!googleMapsApiKey || !mapReady.value || !mapContainerRef.value) return
   if (mapInstance) {
@@ -916,13 +1071,48 @@ const initializeMap = async () => {
       { featureType: 'transit', stylers: [{ visibility: 'simplified' }] },
     ],
   })
+  viewportCenter.value = { lat: activeCenter.value.latitude, lng: activeCenter.value.longitude }
+
+  // Initial marker fetch for the default viewport
+  const initialBounds = mapInstance.getBounds()
+  if (initialBounds) {
+    void fetchMapMarkers(initialBounds)
+  }
+
+  // Idle listener: refresh markers on pan/zoom and show "Search this area" button
+  idleListener = mapInstance.addListener('idle', () => {
+    if (programmaticMove) { programmaticMove = false; return }
+    const bounds = mapInstance.getBounds()
+    if (!bounds) return
+    void fetchMapMarkers(bounds)
+    // Show "Search this area" button if center drifted > 500m
+    const center = mapInstance.getCenter()
+    if (center && viewportCenter.value && g.maps.geometry) {
+      const dist = g.maps.geometry.spherical.computeDistanceBetween(
+        center,
+        new g.maps.LatLng(viewportCenter.value.lat, viewportCenter.value.lng),
+      )
+      showSearchAreaBtn.value = dist > 500
+    }
+  })
+
   updateMapMarkers()
 }
 
 
 watch(facilities, () => {
   if (mapInstance) {
-    updateMapMarkers()
+    const bounds = mapInstance.getBounds()
+    if (bounds) {
+      void fetchMapMarkers(bounds)
+    }
+  }
+})
+
+watch(mapMarkerData, () => {
+  if (mapInstance) {
+    // Don't fit bounds on marker refresh from pan/zoom — only replot markers in place
+    updateMapMarkers(false)
   }
 })
 
@@ -949,6 +1139,9 @@ onUnmounted(() => {
   if (autocompleteTimer) clearTimeout(autocompleteTimer)
   if (autocompleteController) autocompleteController.abort()
   if (searchController) searchController.abort()
+  if (markerController) markerController.abort()
+  if (radiusDebounce) clearTimeout(radiusDebounce)
+  if (idleListener) idleListener.remove()
 })
 </script>
 
@@ -1034,7 +1227,8 @@ onUnmounted(() => {
         <span class="cp-stat__label">Restaurants</span>
       </div>
       <div class="cp-stat">
-        <span class="cp-stat__value">{{ sliceCounts.elite.toLocaleString() }}</span>
+        <span class="cp-stat__context">{{ totalMatches.toLocaleString() }} found</span>
+        <span class="cp-stat__value cp-stat__value--elite">{{ sliceCounts.elite.toLocaleString() }}</span>
         <span class="cp-stat__label">Excellent rated</span>
       </div>
       <div class="cp-stat">
@@ -1053,7 +1247,7 @@ onUnmounted(() => {
         step="0.5"
         :min-label="'0.5 mi'"
         :max-label="'15 mi'"
-        @change="onRadiusChange"
+        @input="onRadiusChange"
       />
     </section>
 
@@ -1111,6 +1305,15 @@ onUnmounted(() => {
     <!-- ─── Map view ─── -->
     <section v-if="googleMapsApiKey" class="cp-map-section">
       <div ref="mapContainerRef" class="cp-map"></div>
+      <cv-button
+        v-if="showSearchAreaBtn"
+        kind="primary"
+        size="small"
+        class="cp-search-area-btn"
+        @click="searchThisArea"
+      >
+        <Search16 /> Search this area
+      </cv-button>
     </section>
 
     <!-- ─── Results list ─── -->
@@ -1152,6 +1355,8 @@ onUnmounted(() => {
           v-for="facility in facilities"
           :key="facility.id"
           class="cp-card"
+          :class="scoreTierClass(facility.trust_score)"
+          @click="focusOnFacility(facility)"
         >
           <div class="cp-card__body">
             <h3 class="cp-card__name">{{ facility.name }}</h3>
@@ -1171,7 +1376,7 @@ onUnmounted(() => {
               class="cp-vote-btn"
               :aria-label="`Recommend ${facility.name}`"
               :disabled="isVoting(facility.id)"
-              @click="submitVote(facility.id, 'like')"
+              @click.stop="submitVote(facility.id, 'like')"
             >
               <ThumbsUp16 /> {{ facility.likes ?? 0 }}
             </button>
@@ -1179,7 +1384,7 @@ onUnmounted(() => {
               class="cp-vote-btn"
               :aria-label="`Not recommended ${facility.name}`"
               :disabled="isVoting(facility.id)"
-              @click="submitVote(facility.id, 'dislike')"
+              @click.stop="submitVote(facility.id, 'dislike')"
             >
               <ThumbsDown16 /> {{ facility.dislikes ?? 0 }}
             </button>

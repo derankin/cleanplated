@@ -50,6 +50,17 @@ pub struct VoteRequest {
     pub vote: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MarkerSearchParams {
+    pub min_lat: f64,
+    pub max_lat: f64,
+    pub min_lon: f64,
+    pub max_lon: f64,
+    pub jurisdiction: Option<String>,
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+}
+
 pub async fn health() -> Json<HealthPayload> {
     Json(HealthPayload {
         status: "ok",
@@ -75,11 +86,48 @@ pub async fn list_facilities(
             page: params.page,
             page_size: params.page_size,
             limit: params.limit,
+            min_lat: None,
+            max_lat: None,
+            min_lon: None,
+            max_lon: None,
         })
         .await
         .map_err(internal_error)?;
 
     Ok(Json(serde_json::json!(facilities)))
+}
+
+pub async fn list_markers(
+    State(state): State<AppState>,
+    Query(params): Query<MarkerSearchParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let limit = params.limit.unwrap_or(200).clamp(1, 200);
+    let result = state
+        .directory_service
+        .search_markers(
+            FacilitySearchQuery {
+                q: params.q,
+                latitude: None,
+                longitude: None,
+                radius_miles: None,
+                jurisdiction: params.jurisdiction,
+                sort: None,
+                score_slice: None,
+                recent_only: None,
+                page: None,
+                page_size: None,
+                limit: None,
+                min_lat: Some(params.min_lat),
+                max_lat: Some(params.max_lat),
+                min_lon: Some(params.min_lon),
+                max_lon: Some(params.max_lon),
+            },
+            limit,
+        )
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(serde_json::json!(result)))
 }
 
 pub async fn get_facility(

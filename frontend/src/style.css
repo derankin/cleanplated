@@ -339,6 +339,18 @@ body {
   letter-spacing: 0.32px;
 }
 
+.cp-stat__context {
+  display: block;
+  font-size: 11px;
+  color: var(--cp-text-secondary);
+  letter-spacing: 0.32px;
+  margin-bottom: 2px;
+}
+
+.cp-stat__value--elite {
+  color: var(--cp-green-600);
+}
+
 /* ═══════════════════════════════════════════════════
    Radius slider — contained within panel
    ═══════════════════════════════════════════════════ */
@@ -506,9 +518,19 @@ body {
    Map
    ═══════════════════════════════════════════════════ */
 .cp-map-section {
+  position: relative;
   border-top: 1px solid var(--cp-border);
   border-bottom: 1px solid var(--cp-border);
   overflow: hidden;
+}
+
+.cp-search-area-btn {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 
 .cp-map {
@@ -561,6 +583,7 @@ body {
   grid-template-rows: auto auto;
   gap: var(--sp-2) var(--sp-3);
   transition: background var(--duration-fast) var(--ease-productive);
+  cursor: pointer;
 }
 
 .cp-card:first-child {
@@ -628,6 +651,10 @@ body {
   letter-spacing: 0.32px;
   margin-top: 2px;
 }
+
+.cp-card--elite { border-left: 4px solid var(--cp-green-600); }
+.cp-card--solid { border-left: 4px solid #f1c21b; }
+.cp-card--watch { border-left: 4px solid var(--cp-red-500); }
 
 .score--excellent {
   background: var(--cp-green-100);

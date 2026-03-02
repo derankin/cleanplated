@@ -309,6 +309,61 @@ impl FacilityRepository for InMemoryFacilityRepository {
 
         Ok(suggestions)
     }
+
+    async fn search_markers(
+        &self,
+        query: &FacilitySearchQuery,
+        limit: usize,
+    ) -> Result<Vec<(String, String, f64, f64, u8)>, RepositoryError> {
+        let capped = limit.clamp(1, 200);
+        let mut facilities = self.facilities.read().await.clone();
+
+        // Bounding box filter
+        if let (Some(min_lat), Some(max_lat), Some(min_lon), Some(max_lon)) =
+            (query.min_lat, query.max_lat, query.min_lon, query.max_lon)
+        {
+            facilities.retain(|f| {
+                f.latitude >= min_lat
+                    && f.latitude <= max_lat
+                    && f.longitude >= min_lon
+                    && f.longitude <= max_lon
+            });
+        }
+
+        // Jurisdiction filter
+        if let Some(jurisdiction) = query
+            .jurisdiction
+            .as_ref()
+            .map(|v| v.trim().to_ascii_lowercase())
+        {
+            if !jurisdiction.is_empty() && jurisdiction != "all" {
+                facilities.retain(|f| {
+                    f.jurisdiction.code() == jurisdiction
+                        || f.jurisdiction.label().eq_ignore_ascii_case(&jurisdiction)
+                });
+            }
+        }
+
+        // Text filter
+        if let Some(term) = query.q.as_ref().map(|v| v.trim().to_ascii_lowercase()) {
+            if !term.is_empty() {
+                facilities.retain(|f| {
+                    f.name.to_ascii_lowercase().contains(&term)
+                        || f.address.to_ascii_lowercase().contains(&term)
+                        || f.city.to_ascii_lowercase().contains(&term)
+                        || f.postal_code.contains(&term)
+                });
+            }
+        }
+
+        facilities.sort_by(|a, b| b.trust_score.cmp(&a.trust_score));
+
+        Ok(facilities
+            .into_iter()
+            .take(capped)
+            .map(|f| (f.id, f.name, f.latitude, f.longitude, f.trust_score))
+            .collect())
+    }
 }
 
 fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {

@@ -68,3 +68,18 @@ pub struct FacilityDetail {
     pub dislikes: u64,
     pub vote_score: i64,
 }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MarkerPoint {
+    pub id: String,
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub trust_score: u8,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MarkerSearchResult {
+    pub data: Vec<MarkerPoint>,
+    pub count: usize,
+}

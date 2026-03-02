@@ -44,4 +44,9 @@ pub trait FacilityRepository: Send + Sync {
         &self,
         limit: usize,
     ) -> Result<Vec<(Facility, FacilityVoteSummary)>, RepositoryError>;
+    async fn search_markers(
+        &self,
+        query: &FacilitySearchQuery,
+        limit: usize,
+    ) -> Result<Vec<(String, String, f64, f64, u8)>, RepositoryError>;
 }

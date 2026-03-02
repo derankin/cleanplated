@@ -160,6 +160,10 @@ pub struct FacilitySearchQuery {
     pub page: Option<usize>,
     pub page_size: Option<usize>,
     pub limit: Option<usize>,
+    pub min_lat: Option<f64>,
+    pub max_lat: Option<f64>,
+    pub min_lon: Option<f64>,
+    pub max_lon: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]

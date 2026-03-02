@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    application::dto::{FacilityDetail, FacilitySearchResult, FacilitySummary},
+    application::dto::{FacilityDetail, FacilitySearchResult, FacilitySummary, MarkerPoint, MarkerSearchResult},
     domain::{
         entities::{
             AutocompleteSuggestion, Facility, FacilitySearchQuery, FacilityVoteSummary,
@@ -109,6 +109,29 @@ impl DirectoryService {
             dislikes: vote_summary.dislikes,
             vote_score: vote_summary.score(),
         }))
+    }
+
+    pub async fn search_markers(
+        &self,
+        query: FacilitySearchQuery,
+        limit: usize,
+    ) -> Result<MarkerSearchResult, crate::domain::errors::RepositoryError> {
+        let rows = self
+            .repository
+            .search_markers(&query, limit.clamp(1, 200))
+            .await?;
+        let data = rows
+            .into_iter()
+            .map(|(id, name, lat, lon, score)| MarkerPoint {
+                id,
+                name,
+                latitude: lat,
+                longitude: lon,
+                trust_score: score,
+            })
+            .collect::<Vec<_>>();
+        let count = data.len();
+        Ok(MarkerSearchResult { data, count })
     }
 
     pub async fn top_picks(
