@@ -1307,8 +1307,10 @@ onUnmounted(() => {
       <p class="cp-meta">Last updated: {{ lastRefreshLabel }}</p>
     </section>
 
-    <!-- ─── Footer ─── -->
-    <footer class="cp-footer">
+  </main>
+
+  <!-- ─── Footer ─── -->
+  <footer class="cp-footer">
     <div class="cp-footer__inner">
       <p class="cp-footer__brand">CleanPlated</p>
       <p class="cp-footer__copy">
@@ -1325,6 +1327,5 @@ onUnmounted(() => {
       </nav>
       <p class="cp-footer__legal">&copy; {{ new Date().getFullYear() }} CleanPlated. All rights reserved.</p>
     </div>
-    </footer>
-  </main>
+  </footer>
 </template>
