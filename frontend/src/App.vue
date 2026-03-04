@@ -905,8 +905,11 @@ const updateMapMarkers = (fitToMarkers = true) => {
   markerById = {}
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const g = (window as any).google
-  if (mapInfoWindow) mapInfoWindow.close()
-  mapInfoWindow = new g.maps.InfoWindow()
+  // Close any existing InfoWindow
+  if (mapInfoWindow) {
+    mapInfoWindow.close()
+    mapInfoWindow = null
+  }
   const bounds = new g.maps.LatLngBounds()
   let hasCoords = false
   for (const f of mapMarkerData.value) {
@@ -926,8 +929,13 @@ const updateMapMarkers = (fitToMarkers = true) => {
         strokeColor: '#fff',
         strokeWeight: 2,
       },
+      optimized: false, // Prevents marker clustering issues
     })
     marker.addListener('click', () => {
+      // Close any existing InfoWindow first
+      if (mapInfoWindow) {
+        mapInfoWindow.close()
+      }
       openMarkerInfoWindow(f, marker, pinColor)
     })
     mapMarkers.push(marker)
@@ -978,17 +986,33 @@ const updateRadiusCircle = (
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const openMarkerInfoWindow = (f: MarkerPoint, marker: any, pinColor: string) => {
-  if (!mapInfoWindow || !mapInstance) return
+  if (!mapInstance) return
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = (window as any).google
+  
+  // Always create a fresh InfoWindow to avoid DOM conflicts
+  mapInfoWindow = new g.maps.InfoWindow({
+    disableAutoPan: false,
+    maxWidth: 300,
+    zIndex: 1000, // Ensure InfoWindow appears above other elements
+  })
+  
   const band = scoreBandMeta(f.trust_score)
-  mapInfoWindow.setContent(
-    `<div style="font-family:IBM Plex Sans,sans-serif;max-width:260px;padding:4px 0">` +
-    `<strong style="font-size:14px;line-height:1.3">${escHtml(f.name)}</strong>` +
-    `<div style="margin-top:6px;display:inline-flex;align-items:center;gap:6px">` +
+  const content = 
+    `<div style="font-family:IBM Plex Sans,sans-serif;max-width:260px;padding:8px;z-index:1001;position:relative">` +
+    `<strong style="font-size:14px;line-height:1.3;display:block;margin-bottom:6px">${escHtml(f.name)}</strong>` +
+    `<div style="display:inline-flex;align-items:center;gap:6px">` +
     `<span style="background:${pinColor};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600">${f.trust_score}</span>` +
     `<span style="font-size:12px;color:#525252">${escHtml(band.label)}</span>` +
     `</div></div>`
-  )
+  
+  mapInfoWindow.setContent(content)
   mapInfoWindow.open(mapInstance, marker)
+  
+  // Add event listener to clean up when InfoWindow closes
+  mapInfoWindow.addListener('closeclick', () => {
+    mapInfoWindow = null
+  })
 }
 
 const buildFacilityInfoWindowHtml = (facility: FacilitySummary) => {
@@ -1027,6 +1051,12 @@ const focusOnFacility = (facility: FacilitySummary) => {
   const g = (window as any).google
   if (!g?.maps) return
 
+  // Close any existing InfoWindow first to prevent conflicts
+  if (mapInfoWindow) {
+    mapInfoWindow.close()
+    mapInfoWindow = null
+  }
+
   // Scroll map into view
   const mapEl = document.querySelector('.cp-map-section')
   if (mapEl) mapEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -1036,18 +1066,32 @@ const focusOnFacility = (facility: FacilitySummary) => {
   mapInstance.panTo(pos)
   mapInstance.setZoom(Math.max(mapInstance.getZoom(), 15))
 
-  const html = buildFacilityInfoWindowHtml(facility)
+  // Wait for map animation to complete before opening InfoWindow
+  setTimeout(() => {
+    const html = buildFacilityInfoWindowHtml(facility)
+    
+    // Create a fresh InfoWindow with proper z-index
+    mapInfoWindow = new g.maps.InfoWindow({ 
+      content: html,
+      disableAutoPan: false,
+      maxWidth: 320,
+      zIndex: 1000,
+    })
 
-  // If there's a matching marker, anchor the InfoWindow to it
-  const marker = markerById[facility.id]
-  if (mapInfoWindow) mapInfoWindow.close()
-  mapInfoWindow = new g.maps.InfoWindow({ content: html })
-  if (marker) {
-    mapInfoWindow.open(mapInstance, marker)
-  } else {
-    mapInfoWindow.setPosition(pos)
-    mapInfoWindow.open(mapInstance)
-  }
+    // If there's a matching marker, anchor the InfoWindow to it
+    const marker = markerById[facility.id]
+    if (marker) {
+      mapInfoWindow.open(mapInstance, marker)
+    } else {
+      mapInfoWindow.setPosition(pos)
+      mapInfoWindow.open(mapInstance)
+    }
+
+    // Clean up when InfoWindow closes
+    mapInfoWindow.addListener('closeclick', () => {
+      mapInfoWindow = null
+    })
+  }, 300) // Wait for pan animation
 
   trackEvent('cp_card_focused_on_map', { facility_id: facility.id, facility_name: facility.name })
 }

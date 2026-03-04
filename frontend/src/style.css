@@ -566,6 +566,23 @@ body {
   padding-right: 16px;
 }
 
+/* Ensure InfoWindows have proper z-index and don't block interactions */
+.cp-map .gm-style-iw {
+  z-index: 1000 !important;
+  pointer-events: auto !important;
+}
+
+/* Prevent InfoWindow from interfering with marker clicks */
+.cp-map .gm-style-iw-tc {
+  pointer-events: none !important;
+}
+
+/* Ensure map markers remain clickable */
+.cp-map div[role="button"][title] {
+  pointer-events: auto !important;
+  z-index: 999 !important;
+}
+
 /* ═══════════════════════════════════════════════════
    Result cards (Carbon tile-inspired)
    ═══════════════════════════════════════════════════ */
