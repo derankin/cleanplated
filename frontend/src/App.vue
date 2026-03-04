@@ -931,12 +931,47 @@ const updateMapMarkers = (fitToMarkers = true) => {
       },
       optimized: false, // Prevents marker clustering issues
     })
-    marker.addListener('click', () => {
+    marker.addListener('click', async () => {
       // Close any existing InfoWindow first
       if (mapInfoWindow) {
         mapInfoWindow.close()
+        mapInfoWindow = null
       }
-      openMarkerInfoWindow(f, marker, pinColor)
+      
+      // Find the full facility data to show complete InfoWindow
+      let fullFacility = facilities.value.find(facility => facility.id === f.id)
+      
+      // If not found in current list, fetch it from the API
+      if (!fullFacility) {
+        try {
+          const resp = await fetch(`${apiBaseUrl}/api/v1/facilities/${f.id}`)
+          if (resp.ok) {
+            const response = await resp.json()
+            fullFacility = response.data  // API returns {data: facility}
+          }
+        } catch (err) {
+          console.warn('Failed to fetch facility details:', err)
+        }
+      }
+      
+      if (fullFacility) {
+        // Use the same complete InfoWindow as list items
+        const html = buildFacilityInfoWindowHtml(fullFacility)
+        mapInfoWindow = new g.maps.InfoWindow({
+          content: html,
+          disableAutoPan: false,
+          maxWidth: 320,
+          zIndex: 1000,
+        })
+        mapInfoWindow.open(mapInstance, marker)
+        mapInfoWindow.addListener('closeclick', () => {
+          mapInfoWindow = null
+        })
+        trackEvent('cp_marker_clicked', { facility_id: f.id, facility_name: f.name })
+      } else {
+        // Fallback to basic InfoWindow if full data not available
+        openMarkerInfoWindow(f, marker, pinColor)
+      }
     })
     mapMarkers.push(marker)
     markerById[f.id] = marker
