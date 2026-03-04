@@ -305,7 +305,7 @@ const formatSourceName = (source: string) => {
   const labels: Record<string, string> = {
     la_county_open_data: 'Los Angeles County',
     san_diego_socrata: 'San Diego County',
-    long_beach_live_plus_closures: 'City of Long Beach',
+    long_beach_closures_page: 'City of Long Beach',
     lives_batch_riv_sbc: 'Riverside & San Bernardino',
     cpra_import_orange_pasadena: 'Orange County & Pasadena',
   }
